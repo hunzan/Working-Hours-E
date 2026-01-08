@@ -320,3 +320,29 @@ th, td {
     min-width: 0;
   }
 }
+.flash-danger {
+  background: #ffe5e5;
+  color: #8b0000;
+  border-left: 5px solid #cc0000;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-weight: bold;
+}
+
+.flash-warning {
+  background: #fff4cc;
+  color: #7a5c00;
+  border-left: 5px solid #e0b000;
+}
+
+.flash-success {
+  background: #e6f7e6;
+  color: #146c43;
+  border-left: 5px solid #2e8b57;
+}
+
+.flash-info {
+  background: #e8f1ff;
+  color: #003a8f;
+  border-left: 5px solid #4a7cff;
+}
