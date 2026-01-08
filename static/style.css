@@ -2,17 +2,17 @@
    色系變數 + 尺寸變數
 ========================= */
 :root {
-  --bg: #f7f8fa;
-  --card: #	#E0E0E0;
+  --bg: #D6D6AD;
+  --card: #E0E0E0;
   --primary: #2d6cdf;
-  --secondary: #00a0a6;
+  --secondary: 	#467500;
   --danger: #e5533d;
   --border: #d0d7e2;
   --text: #222;
-  --muted: #666;
+  --muted: #4F4F4F;
 
   /* ✅ 統一按鈕文字大小（全站一致） */
-  --btn-font: 16px;
+  --btn-font: 18px;
   --btn-line: 1.2;
 }
 
