@@ -95,19 +95,22 @@ def create_app():
     # -------------------------
     @app.before_request
     def cleanup_last_year_if_needed():
+        # 🚨 預設關閉自動清理（避免 Railway deploy 時誤刪）
+        if os.environ.get("ENABLE_AUTO_CLEANUP") != "1":
+            return
+
         today = date.today()
         if not today_after_jan10(today):
             return
+
         last_year = today.year - 1
         old_cases = Case.query.filter_by(fiscal_year=last_year).all()
         if old_cases:
             for c in old_cases:
                 db.session.delete(c)
             db.session.commit()
+            print(f"🧹 AUTO CLEANUP: deleted {len(old_cases)} cases of year {last_year}")
 
-    # ✅✅✅ 下面開始：把你原本所有 routes 原封不動貼進來（保持縮排在 create_app 裡）
-    # teacher_login / teacher_logout / teacher_forgot / dashboard / case_new / case_detail / teacher_export / lookup ...
-    #
     # =========================
     # ROUTES START
     # =========================
