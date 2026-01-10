@@ -40,13 +40,19 @@ def create_app():
     # 基本設定
     # =========================
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-change-me")
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///app.db")
 
-    # SQLAlchemy 常見坑：有些平台給的是 postgres://，要改成 postgresql://
+    db_url = (os.environ.get("DATABASE_URL") or "").strip()
+
+    # ✅ 本機沒設 DATABASE_URL → 用 SQLite
+    if not db_url:
+        db_url = "sqlite:///app.db"
+
+    # ✅ Railway/Heroku 常見坑：postgres:// 要換成 postgresql://
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
     app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # =========================
