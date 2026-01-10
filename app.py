@@ -1,16 +1,16 @@
-import os, io, csv, requests
+import os
+import io
+import csv
 from datetime import date, datetime
 
 from flask import Flask, render_template, request, redirect, url_for, session as flask_session, flash, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
-
-from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from models import db, Teacher, Case, CaseService, Session
 from utils import encrypt_code, decrypt_code, generate_query_code, today_after_jan10, service_label
+from mailer import send_reset_email
 
-mail = Mail()
 serializer = None  # 之後在 create_app 內設定
 
 
@@ -32,33 +32,6 @@ def require_login():
         flash("請先登入用戶帳號。", "warning")
         return redirect(url_for("teacher_login"))
     return None
-
-def send_reset_email(to_email: str, subject: str, body: str):
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    mail_from = os.environ.get("MAIL_FROM")
-
-    if not api_key or not mail_from:
-        raise RuntimeError("Missing SENDGRID_API_KEY or MAIL_FROM")
-
-    payload = {
-        "personalizations": [{"to": [{"email": to_email}]}],
-        "from": {"email": mail_from},
-        "subject": subject,
-        "content": [{"type": "text/plain", "value": body}],
-    }
-
-    r = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=10,
-    )
-
-    if r.status_code >= 400:
-        raise RuntimeError(f"SendGrid error {r.status_code}: {r.text[:200]}")
 
 def create_app():
     app = Flask(__name__)
@@ -90,7 +63,6 @@ def create_app():
     # 套件初始化
     # =========================
     db.init_app(app)
-    mail.init_app(app)
 
     global serializer
     serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
@@ -206,29 +178,31 @@ def create_app():
                 flash("請輸入 Email。", "danger")
                 return redirect(url_for("teacher_forgot"))
 
-            # ✅ 先查出老師（才能做年度計數）
+            # 不管有沒有這個 email，都回同樣訊息（避免被探測帳號）
+            GENERIC_MSG = "若此 Email 已註冊，系統會寄出重設密碼連結。請查看收件匣/垃圾郵件。"
+
             t = Teacher.query.filter_by(email=email).first()
 
             if t:
                 now_year = datetime.utcnow().year
 
-                # 年度標籤不一樣 → 代表跨年，歸零
-                if t.reset_count_year_tag != now_year:
+                # ✅ 欄位可能為 None（新用戶/舊資料），要防呆
+                tag = getattr(t, "reset_count_year_tag", None)
+                cnt = getattr(t, "reset_count_year", 0) or 0
+
+                # 跨年就歸零
+                if tag != now_year:
                     t.reset_count_year = 0
                     t.reset_count_year_tag = now_year
+                    db.session.commit()
+                    cnt = 0
 
-                # ✅ 每年限制（你之後可調整數字）
                 LIMIT_PER_YEAR = 3
-                if t.reset_count_year >= LIMIT_PER_YEAR:
-                    # 仍然回同樣訊息（避免被探測），但不寄信
-                    flash("若此 Email 已註冊，系統會寄出重設密碼連結。請查看收件匣/垃圾郵件。", "info")
+                if cnt >= LIMIT_PER_YEAR:
+                    # 超過上限：仍回同樣訊息，但不寄
+                    flash(GENERIC_MSG, "info")
                     return redirect(url_for("teacher_login"))
 
-                # ✅ 計數 +1
-                t.reset_count_year += 1
-                db.session.commit()
-
-                # 產生 token / link
                 token = serializer.dumps({"tid": t.id}, salt="pw-reset")
                 reset_link = url_for("teacher_reset", token=token, _external=True)
 
@@ -242,15 +216,19 @@ def create_app():
                 try:
                     send_reset_email(email, subject, body)
                     print("✅ reset email sent ->", email)
+
+                    # ✅ 只有「寄信成功」才扣額度
+                    t.reset_count_year = (getattr(t, "reset_count_year", 0) or 0) + 1
+                    t.reset_count_year_tag = now_year
+                    db.session.commit()
+
                 except Exception as e:
+                    # ❗不要 flash 失敗（會洩漏這個 email 真的存在）
                     print("❌ reset email FAILED:", repr(e))
-                    # 注意：這裡若顯示「寄信失敗」，其實會洩漏「這個 email 真的存在」
-                    # 所以建議不要 flash danger，仍然回同樣訊息
-                    # （真的要提示，可以只提示「系統忙碌」但不說寄信）
+                    # 不扣額度，仍回同樣訊息
                     pass
 
-            # ✅ 不管 t 存不存在，都回同樣訊息
-            flash("若此 Email 已註冊，系統會寄出重設密碼連結。請查看收件匣/垃圾郵件。", "info")
+            flash(GENERIC_MSG, "info")
             return redirect(url_for("teacher_login"))
 
         return render_template("teacher_forgot.html")
@@ -261,10 +239,19 @@ def create_app():
         try:
             data = serializer.loads(token, salt="pw-reset", max_age=60 * 30)
             tid = data.get("tid")
+            if not tid:
+                raise BadSignature("missing tid")
         except SignatureExpired:
             flash("重設連結已過期，請重新申請一次。", "warning")
             return redirect(url_for("teacher_forgot"))
         except BadSignature:
+            flash("重設連結無效，請重新申請一次。", "danger")
+            return redirect(url_for("teacher_forgot"))
+
+        # tid 可能不是 int（保險）
+        try:
+            tid = int(tid)
+        except Exception:
             flash("重設連結無效，請重新申請一次。", "danger")
             return redirect(url_for("teacher_forgot"))
 
@@ -287,6 +274,13 @@ def create_app():
                 return redirect(url_for("teacher_reset", token=token))
 
             t.password_hash = generate_password_hash(pw1)
+
+            # ✅ 可選：重設成功後，把年度額度歸零（讓使用者不會被「成功一次就扣一次」卡死）
+            # 如果你想保留「每年最多重設 3 次」的嚴格限制，就把這段註解掉。
+            now_year = datetime.utcnow().year
+            t.reset_count_year_tag = now_year
+            t.reset_count_year = 0
+
             db.session.commit()
             flash("密碼已更新，請用新密碼登入。", "success")
             return redirect(url_for("teacher_login"))
